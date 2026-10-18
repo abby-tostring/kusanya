@@ -1,0 +1,22 @@
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kusanya
+      POSTGRES_PASSWORD: kusanya_dev_password
+      POSTGRES_DB: kusanya
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  mailpit:
+    image: axllent/mailpit
+    restart: unless-stopped
+    ports:
+      - "8025:8025"   # web inbox for test emails
+      - "1025:1025"   # SMTP
+
+volumes:
+  pgdata:

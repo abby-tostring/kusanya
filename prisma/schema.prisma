@@ -1,0 +1,649 @@
+// Kusanya database schema, version 1 (starting point).
+// Run `npx prisma validate` first, then `npx prisma migrate dev --name init`.
+// Notes for later SQL migrations are marked NOTE.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- Enums ----------
+
+enum UserRole {
+  USER
+  MODERATOR
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum Theme {
+  LIGHT
+  DARK
+  SYSTEM
+}
+
+enum AuthProvider {
+  GOOGLE
+  EMAIL
+}
+
+enum SellerStatus {
+  UNCLAIMED
+  PENDING
+  VERIFIED
+  SUSPENDED
+}
+
+enum SellsType {
+  STOCK
+  SOURCING
+  BOTH
+}
+
+enum ShopperService {
+  SHOPS_FOR_YOU
+  MARKET_GUIDE
+  BOTH
+}
+
+enum ItemStatus {
+  UPCOMING
+  AVAILABLE
+  RESERVED
+  SOLD
+  HIDDEN
+}
+
+enum ListingType {
+  IN_STOCK
+  SOURCED_ON_REQUEST
+}
+
+enum ItemCondition {
+  NEW_WITH_TAGS
+  LIKE_NEW
+  GOOD
+  FAIR
+}
+
+enum ReservationStatus {
+  REQUESTED
+  CONFIRMED
+  EXPIRED
+  CANCELLED
+  COMPLETED
+}
+
+enum RatingStatus {
+  VISIBLE
+  HIDDEN
+}
+
+enum ReportTarget {
+  PROFILE
+  ITEM
+  MESSAGE
+  RATING
+  USER
+}
+
+enum ReportStatus {
+  OPEN
+  ACTIONED
+  DISMISSED
+}
+
+enum ProfileEventType {
+  SHOP_VIEW
+  ITEM_VIEW
+  SEARCH_IMPRESSION
+}
+
+enum ConsentType {
+  TERMS
+  PRIVACY
+  AGE_18
+}
+
+enum SaleSource {
+  MANUAL
+  CONFIRMED_SALE
+}
+
+enum HomeContentType {
+  HERO_IMAGE
+  RANDOM_IMAGE
+  CATEGORY_TILE
+  TESTIMONIAL
+  SUPPORT_US
+}
+
+enum ContentStatus {
+  DRAFT
+  APPROVED
+}
+
+// ---------- Users and sign-in ----------
+
+model User {
+  id               String     @id @default(cuid())
+  role             UserRole   @default(USER)
+  status           UserStatus @default(ACTIVE)
+  name             String?    // private, never shown publicly
+  email            String?    @unique
+  phone            String?    @unique // private
+  username         String?
+  usernameLower    String?    @unique // case-insensitive uniqueness
+  dateOfBirth      DateTime?  @db.Date // private, used for the 18+ check only
+  avatarUrl        String?
+  theme            Theme      @default(SYSTEM)
+  emailVerifiedAt  DateTime?
+  usernameChangedAt DateTime?
+  createdAt        DateTime   @default(now())
+  lastLoginAt      DateTime?
+  deletedAt        DateTime?
+
+  authAccounts      AuthAccount[]
+  sellerProfile     SellerProfile?
+  likes             Like[]
+  follows           Follow[]
+  conversations     Conversation[]     @relation("BuyerConversations")
+  messagesSent      Message[]
+  ratingsGiven      Rating[]
+  reservations      ItemReservation[]
+  itemsBought       Item[]             @relation("ItemsBought")
+  notifications     Notification[]
+  notificationPref  NotificationPref?
+  pushSubscriptions PushSubscription[]
+  reportsMade       Report[]           @relation("ReportsMade")
+  reportsHandled    Report[]           @relation("ReportsHandled")
+  blocksMade        Block[]            @relation("Blocker")
+  blocksReceived    Block[]            @relation("Blocked")
+  consents          Consent[]
+  auditLogs         AuditLog[]
+
+  @@index([status])
+}
+
+model AuthAccount {
+  id             String       @id @default(cuid())
+  userId         String
+  provider       AuthProvider
+  providerUserId String
+  createdAt      DateTime     @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerUserId])
+  @@index([userId])
+}
+
+model EmailLoginCode {
+  id         String    @id @default(cuid())
+  email      String
+  codeHash   String
+  expiresAt  DateTime
+  attempts   Int       @default(0)
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([email, createdAt])
+}
+
+model Consent {
+  id         String      @id @default(cuid())
+  userId     String
+  type       ConsentType
+  version    String
+  acceptedAt DateTime    @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+}
+
+// ---------- Shops (seller profiles) ----------
+
+model SellerProfile {
+  id                  String          @id @default(cuid())
+  userId              String?         @unique // empty until a preset profile is claimed
+  market              String          @default("kenya")
+  shopName            String
+  slug                String          @unique
+  bio                 String?
+  avatarUrl           String?
+  bannerUrl           String?
+  instagramHandle     String?
+  tiktokHandle        String?
+  socialLinks         Json?
+  sellsType           SellsType       @default(STOCK)
+  area                String?
+  status              SellerStatus    @default(PENDING)
+  isFoundingSeller    Boolean         @default(false)
+  isPersonalShopper   Boolean         @default(false)
+  shopperServices     ShopperService?
+  shopperVerifiedAt   DateTime?
+  verifiedAt          DateTime?
+  featuredUntil       DateTime?
+  featuredOnHome      Boolean         @default(false)
+  homeSort            Int?
+  claimTokenHash      String?
+  claimExpiresAt      DateTime?
+  ratingAvg           Float           @default(0)
+  ratingCount         Int             @default(0)
+  followerCount       Int             @default(0)
+  itemsSoldCount      Int             @default(0)
+  aboutMe             String?
+  rulesTerms          String?
+  rulesPayment        String?
+  rulesDelivery       String?
+  sizeChartText       String?
+  sizeChartImageUrl   String?
+  phonePrivate        String?         // private, for verification calls
+  setupCompletedAt    DateTime?
+  plan                String          @default("free") // billing is not built in the MVP
+  createdByAdmin      Boolean         @default(false)
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
+
+  user           User?             @relation(fields: [userId], references: [id], onDelete: SetNull)
+  categories     ProfileCategory[]
+  images         ProfileImage[]
+  items          Item[]
+  followers      Follow[]
+  conversations  Conversation[]
+  ratings        Rating[]
+  salesLog       SalesLog[]
+  events         ProfileEvent[]
+  featuredDays   FeaturedSeller[]
+
+  @@index([status])
+  @@index([isPersonalShopper, status])
+}
+
+model Category {
+  id        Int     @id @default(autoincrement())
+  name      String
+  slug      String  @unique
+  parentId  Int?
+  market    String  @default("kenya")
+  sortOrder Int     @default(0)
+  imageUrl  String?
+
+  parent      Category?         @relation("CategoryTree", fields: [parentId], references: [id])
+  children    Category[]        @relation("CategoryTree")
+  profiles    ProfileCategory[]
+  items       Item[]
+  searchTerms SearchTerm[]
+
+  @@index([parentId])
+}
+
+model ProfileCategory {
+  profileId  String
+  categoryId Int
+
+  profile  SellerProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+  category Category      @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@id([profileId, categoryId])
+}
+
+model ProfileImage {
+  id        String @id @default(cuid())
+  profileId String
+  url       String
+  altText   String?
+  sortOrder Int    @default(0)
+
+  profile SellerProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId])
+}
+
+// ---------- Items ----------
+
+model Item {
+  id                   String        @id @default(cuid())
+  sellerProfileId      String
+  title                String
+  description          String
+  priceKes             Int
+  categoryId           Int
+  size                 String?
+  measurements         Json?         // for example { "chestCm": 52, "lengthCm": 70 }
+  material             String?
+  colour               String?
+  condition            ItemCondition
+  brand                String?
+  defects              String        // required. Use 'None' when there are no defects.
+  listingType          ListingType   @default(IN_STOCK)
+  status               ItemStatus    @default(AVAILABLE)
+  releaseAt            DateTime?     // for upcoming items
+  allowReservations    Boolean       @default(true)
+  reservationHoldHours Int           @default(48)
+  soldToBuyerId        String?
+  soldPriceKes         Int?
+  soldAt               DateTime?
+  buyerConfirmedAt     DateTime?
+  viewCount            Int           @default(0)
+  saveCount            Int           @default(0)
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime      @updatedAt
+
+  sellerProfile SellerProfile     @relation(fields: [sellerProfileId], references: [id], onDelete: Cascade)
+  category      Category          @relation(fields: [categoryId], references: [id])
+  soldToBuyer   User?             @relation("ItemsBought", fields: [soldToBuyerId], references: [id], onDelete: SetNull)
+  images        ItemImage[]
+  likes         Like[]
+  reservations  ItemReservation[]
+  conversations Conversation[]
+  messages      Message[]
+  ratings       Rating[]
+  salesLog      SalesLog[]
+
+  @@index([sellerProfileId, status])
+  @@index([categoryId, status])
+  @@index([status, createdAt])
+  @@index([releaseAt])
+  // NOTE: add a full-text search index with a SQL migration (to_tsvector on title, description, brand).
+}
+
+model ItemImage {
+  id        String  @id @default(cuid())
+  itemId    String
+  url       String
+  altText   String?
+  sortOrder Int     @default(0)
+
+  item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@index([itemId])
+  // NOTE: enforce 3 to 8 images per published item in application code.
+}
+
+model Like {
+  userId    String
+  itemId    String
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  item Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@id([userId, itemId])
+  @@index([itemId])
+}
+
+model Follow {
+  followerId      String
+  sellerProfileId String
+  createdAt       DateTime @default(now())
+
+  follower      User          @relation(fields: [followerId], references: [id], onDelete: Cascade)
+  sellerProfile SellerProfile @relation(fields: [sellerProfileId], references: [id], onDelete: Cascade)
+
+  @@id([followerId, sellerProfileId])
+  @@index([sellerProfileId])
+}
+
+model ItemReservation {
+  id          String            @id @default(cuid())
+  itemId      String
+  buyerId     String
+  status      ReservationStatus @default(REQUESTED)
+  createdAt   DateTime          @default(now())
+  confirmedAt DateTime?
+  expiresAt   DateTime?
+
+  item  Item @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  buyer User @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+
+  @@index([itemId, status])
+  @@index([buyerId])
+  @@index([expiresAt])
+  // NOTE: add a partial unique index in SQL so an item has at most one CONFIRMED reservation:
+  // CREATE UNIQUE INDEX one_confirmed_reservation ON "ItemReservation" ("itemId") WHERE status = 'CONFIRMED';
+}
+
+// ---------- Messaging ----------
+
+model Conversation {
+  id              String   @id @default(cuid())
+  buyerId         String
+  sellerProfileId String
+  itemId          String?  // the item the chat started from
+  createdAt       DateTime @default(now())
+  lastMessageAt   DateTime @default(now())
+
+  buyer         User          @relation("BuyerConversations", fields: [buyerId], references: [id], onDelete: Cascade)
+  sellerProfile SellerProfile @relation(fields: [sellerProfileId], references: [id], onDelete: Cascade)
+  item          Item?         @relation(fields: [itemId], references: [id], onDelete: SetNull)
+  messages      Message[]
+  rating        Rating?
+
+  @@unique([buyerId, sellerProfileId])
+  @@index([sellerProfileId, lastMessageAt])
+  @@index([buyerId, lastMessageAt])
+}
+
+model Message {
+  id             String    @id @default(cuid())
+  conversationId String
+  senderId       String
+  itemId         String?
+  body           String?
+  imageUrl       String?
+  createdAt      DateTime  @default(now())
+  readAt         DateTime?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  item         Item?        @relation(fields: [itemId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+}
+
+// ---------- Ratings and sales ----------
+
+model Rating {
+  id               String       @id @default(cuid())
+  conversationId   String       @unique
+  buyerId          String
+  sellerProfileId  String
+  itemId           String?
+  verifiedPurchase Boolean      @default(false)
+  stars            Int          // 1 to 5, check in application code
+  comment          String?
+  status           RatingStatus @default(VISIBLE)
+  createdAt        DateTime     @default(now())
+  editedAt         DateTime?
+  sellerReply      String?
+  sellerRepliedAt  DateTime?
+
+  conversation  Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  buyer         User          @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  sellerProfile SellerProfile @relation(fields: [sellerProfileId], references: [id], onDelete: Cascade)
+  item          Item?         @relation(fields: [itemId], references: [id], onDelete: SetNull)
+
+  @@unique([buyerId, sellerProfileId]) // one rating per buyer per seller
+  @@index([sellerProfileId, status, createdAt])
+}
+
+model SalesLog {
+  id              String     @id @default(cuid())
+  sellerProfileId String
+  itemId          String?
+  amountKes       Int
+  soldAt          DateTime
+  note            String?
+  source          SaleSource @default(MANUAL)
+
+  sellerProfile SellerProfile @relation(fields: [sellerProfileId], references: [id], onDelete: Cascade)
+  item          Item?         @relation(fields: [itemId], references: [id], onDelete: SetNull)
+
+  @@index([sellerProfileId, soldAt])
+}
+
+// ---------- Notifications ----------
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  type      String
+  payload   Json
+  readAt    DateTime?
+  emailedAt DateTime?
+  pushedAt  DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+}
+
+model NotificationPref {
+  userId       String  @id
+  emailEnabled Boolean @default(true)
+  pushEnabled  Boolean @default(true)
+  smsEnabled   Boolean @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String   @unique
+  keys      Json
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+// ---------- Safety ----------
+
+model Report {
+  id          String       @id @default(cuid())
+  reporterId  String
+  targetType  ReportTarget
+  targetId    String
+  reason      String
+  details     String?
+  status      ReportStatus @default(OPEN)
+  handledById String?
+  handledAt   DateTime?
+  createdAt   DateTime     @default(now())
+
+  reporter  User  @relation("ReportsMade", fields: [reporterId], references: [id], onDelete: Cascade)
+  handledBy User? @relation("ReportsHandled", fields: [handledById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([targetType, targetId])
+}
+
+model Block {
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
+
+  blocker User @relation("Blocker", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked User @relation("Blocked", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@id([blockerId, blockedId])
+  @@index([blockedId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  adminId   String
+  action    String
+  target    String?
+  details   Json?
+  createdAt DateTime @default(now())
+
+  admin User @relation(fields: [adminId], references: [id])
+
+  @@index([createdAt])
+}
+
+// ---------- Analytics (aggregated, no personal data) ----------
+
+model ProfileEvent {
+  id        Int              @id @default(autoincrement())
+  profileId String
+  type      ProfileEventType
+  day       DateTime         @db.Date
+  count     Int              @default(0)
+
+  profile SellerProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@unique([profileId, type, day])
+}
+
+model SearchTerm {
+  id         Int      @id @default(autoincrement())
+  day        DateTime @db.Date
+  categoryId Int?
+  term       String
+  count      Int      @default(1)
+
+  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@unique([day, categoryId, term])
+}
+
+// ---------- Home page and site content ----------
+
+model FeaturedSeller {
+  id              String   @id @default(cuid())
+  sellerProfileId String
+  featuredOn      DateTime @db.Date
+  cycleNumber     Int
+  pinnedByAdmin   Boolean  @default(false)
+
+  sellerProfile SellerProfile @relation(fields: [sellerProfileId], references: [id], onDelete: Cascade)
+
+  @@unique([sellerProfileId, featuredOn])
+  @@index([featuredOn])
+}
+
+model HomeContent {
+  id        String          @id @default(cuid())
+  type      HomeContentType
+  title     String?
+  imageUrl  String?
+  linkUrl   String?
+  body      String?
+  status    ContentStatus   @default(DRAFT)
+  sortOrder Int             @default(0)
+
+  @@index([type, status])
+}
+
+model SponsorSlot {
+  id        String    @id @default(cuid())
+  placement String
+  title     String
+  imageUrl  String?
+  linkUrl   String?
+  label     String    @default("Sponsored")
+  startsAt  DateTime?
+  endsAt    DateTime?
+  active    Boolean   @default(true)
+}
+
+model Setting {
+  key   String @id
+  value String
+}
